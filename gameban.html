@@ -637,26 +637,28 @@ function openWheelOverlay(data) {
   document.getElementById('myConfirmBtn').disabled = myConfirmed || !!confirms[myPlayerId];
   if (confirms[myPlayerId]) myConfirmed = true;
 
-  // Check if all confirmed
-  const allConfirmed = allPids.length > 0 && allPids.every(pid => confirms[pid]);
-  if (allConfirmed && !wheelSpinning) {
-    // Switch to spin phase
-    document.getElementById('wheelConfirmPhase').style.display = 'none';
-    document.getElementById('wheelSpinPhase').style.display = 'flex';
-    document.getElementById('wheelSubtitle').textContent = 'Все согласны! Крутим...';
-    startWheelSpin(data);
-  } else {
-    document.getElementById('wheelConfirmPhase').style.display = 'block';
-    document.getElementById('wheelSpinPhase').style.display = 'none';
-  }
-
-  // If host sees already spun result
+  // Priority 1: wheel already spun — show static result
   if (data.wheelSpunGame !== null && data.wheelSpunGame !== undefined) {
     document.getElementById('wheelConfirmPhase').style.display = 'none';
     document.getElementById('wheelSpinPhase').style.display = 'flex';
     document.getElementById('wheelSubtitle').textContent = 'Колесо остановилось!';
-    drawWheelStatic(data);
+    if (!wheelSpinning) drawWheelStatic(data);
+    return;
   }
+
+  // Priority 2: all confirmed — start spinning (only once)
+  const allConfirmed = allPids.length > 0 && allPids.every(pid => confirms[pid]);
+  if (allConfirmed && !wheelSpinning) {
+    document.getElementById('wheelConfirmPhase').style.display = 'none';
+    document.getElementById('wheelSpinPhase').style.display = 'flex';
+    document.getElementById('wheelSubtitle').textContent = 'Все согласны! Крутим...';
+    startWheelSpin(data);
+    return;
+  }
+
+  // Default: show confirm list
+  document.getElementById('wheelConfirmPhase').style.display = 'block';
+  document.getElementById('wheelSpinPhase').style.display = 'none';
 }
 
 function getWheelItems(data) {
@@ -725,37 +727,41 @@ function startWheelSpin(data) {
   // Pick random winner
   const winnerIdx = Math.floor(Math.random() * wheelItems.length);
   const slice = (2 * Math.PI) / wheelItems.length;
-  // We want pointer (top, -PI/2) to point at winner slice center
-  // Winner slice center angle = winnerIdx * slice + slice/2 (from angle=0)
-  // We need: angle + winnerIdx*slice + slice/2 = -PI/2 + 2*PI*k
-  // Total spin = many full rotations + adjustment
-  const totalRotations = 5 + Math.random() * 3;
-  const targetAngle = -Math.PI / 2 - (winnerIdx * slice + slice / 2);
-  const fullSpin = Math.PI * 2 * totalRotations;
-  const finalAngle = targetAngle - (wheelAngle % (Math.PI * 2)) + fullSpin;
+
+  // Pointer is at TOP = -π/2 in canvas coordinates.
+  // Sector i occupies [angle + i*slice, angle + (i+1)*slice].
+  // Center of sector i = angle + i*slice + slice/2.
+  // We need that center = -π/2  (mod 2π).
+  // So: finalAngle + winnerIdx*slice + slice/2 = -π/2
+  //     finalAngle = -π/2 - winnerIdx*slice - slice/2
+  // Add full rotations so the wheel visually spins several times.
+  const rotations = 6 + Math.floor(Math.random() * 4); // 6-9 full rotations
+  const targetAngle = -Math.PI / 2 - winnerIdx * slice - slice / 2;
+  // normalise into [0, 2π) then add full rotations so we always spin forward
+  const normalised = ((targetAngle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  const finalAngle = normalised + rotations * 2 * Math.PI;
 
   const duration = 4000 + Math.random() * 1500;
   const startTime = performance.now();
-  const startAngle = wheelAngle;
 
   function easeOut(t) { return 1 - Math.pow(1 - t, 4); }
 
   function animate(now) {
     const elapsed = now - startTime;
     const t = Math.min(elapsed / duration, 1);
-    wheelAngle = startAngle + finalAngle * easeOut(t);
+    wheelAngle = finalAngle * easeOut(t);
     drawWheel(wheelItems, wheelAngle);
     if (t < 1) {
       requestAnimationFrame(animate);
     } else {
-      wheelAngle = startAngle + finalAngle;
+      wheelAngle = finalAngle;
       drawWheel(wheelItems, wheelAngle);
       wheelSpinning = false;
       wheelCurrentGame = wheelItems[winnerIdx].name;
       wheelCurrentGameIndex = wheelItems[winnerIdx].index;
       document.getElementById('wheelResult').textContent = '🎯 ' + wheelCurrentGame;
       document.getElementById('wheelActions').style.display = 'flex';
-      // Save result to Firebase so host can ban
+      // Save result to Firebase so ALL players know which game was chosen
       update(roomRef, { wheelSpunGame: wheelCurrentGameIndex });
     }
   }
@@ -770,7 +776,9 @@ function drawWheelStatic(data) {
     const idx = wheelItems.findIndex(i => i.index === data.wheelSpunGame);
     if (idx >= 0) {
       const slice = (2 * Math.PI) / wheelItems.length;
-      wheelAngle = -Math.PI / 2 - (idx * slice + slice / 2);
+      // Same formula as startWheelSpin: pointer at top = -π/2
+      const targetAngle = -Math.PI / 2 - idx * slice - slice / 2;
+      wheelAngle = ((targetAngle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
       wheelCurrentGame = wheelItems[idx].name;
       wheelCurrentGameIndex = wheelItems[idx].index;
     }
@@ -781,16 +789,18 @@ function drawWheelStatic(data) {
 }
 
 window.wheelBanCurrent = async () => {
-  if (wheelCurrentGameIndex === null) return;
   const snap = await get(roomRef);
   const data = snap.val();
-  const banned = data.bannedIndexes || [];
-  if (banned.includes(wheelCurrentGameIndex)) return;
+  // Always read the game index from Firebase — works for all players, not just spinner
+  const gameIdx = data.wheelSpunGame;
+  if (gameIdx === null || gameIdx === undefined) return;
 
-  const newBanned = [...banned, wheelCurrentGameIndex];
-  const remaining = (data.games || []).filter((_, i) => !newBanned.includes(i));
+  const banned = data.bannedIndexes || [];
+  if (banned.includes(gameIdx)) return;
+
+  const newBanned = [...banned, gameIdx];
   const nextIndex = (data.currentTurnIndex || 0) + 1;
-  const logEntry = { pid: myPlayerId, game: data.games[wheelCurrentGameIndex], ts: Date.now(), byWheel: true };
+  const logEntry = { pid: myPlayerId, game: data.games[gameIdx], ts: Date.now(), byWheel: true };
 
   await update(roomRef, {
     bannedIndexes: newBanned,
@@ -801,14 +811,12 @@ window.wheelBanCurrent = async () => {
     wheelSpunGame: null
   });
 
-  // Reset wheel state
+  // Reset local wheel state
   wheelSpinning = false;
   wheelCurrentGame = null;
   wheelCurrentGameIndex = null;
   myConfirmed = false;
   document.getElementById('wheelOverlay').classList.remove('active');
-
-  if (remaining.length === 1) return; // winner will be shown
 };
 
 // ── AUTO JOIN FROM URL ──
