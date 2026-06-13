@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Game Ban Picker</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f0f13;
+    --surface: #1a1a22;
+    --surface2: #22222e;
+    --border: rgba(255,255,255,0.08);
+    --border2: rgba(255,255,255,0.15);
+    --text: #f0f0f5;
+    --muted: #888899;
+    --accent1: #6c63ff;
+    --accent1l: #8b84ff;
+    --accent2: #ff9f43;
+    --accent2l: #ffb86c;
+    --green: #1dd1a1;
+    --red: #ff6b6b;
+    --radius: 10px;
+    --radius-lg: 16px;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 2rem 1rem 4rem;
+  }
+
+  h1 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 4px;
+  }
+
+  .subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 2rem; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    width: 100%;
+    max-width: 520px;
+    margin-bottom: 1rem;
+  }
+
+  .card-title {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    margin-bottom: 1rem;
+  }
+
+  input[type=text] {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 0.95rem;
+    padding: 10px 14px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  input[type=text]:focus { border-color: var(--accent1); }
+
+  .row { display: flex; gap: 8px; }
+  .row input { flex: 1; }
+
+  button {
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 0.9rem;
+    padding: 10px 18px;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    white-space: nowrap;
+  }
+  button:hover { background: #2a2a38; }
+  button:active { transform: scale(0.97); }
+  button.primary {
+    background: var(--accent1);
+    border-color: var(--accent1);
+    font-weight: 600;
+  }
+  button.primary:hover { background: var(--accent1l); border-color: var(--accent1l); }
+  button:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+
+  .games-list { display: flex; flex-wrap: wrap; gap: 8px; min-height: 44px; margin: 1rem 0; }
+  .chip {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    padding: 6px 14px 6px 14px;
+    font-size: 0.85rem;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .chip .x {
+    cursor: pointer; color: var(--muted); font-size: 1rem; line-height: 1;
+    background: none; border: none; padding: 0; color: var(--muted);
+  }
+  .chip .x:hover { color: var(--red); }
+
+  .divider { height: 1px; background: var(--border); margin: 1rem 0; }
+
+  .names-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 1rem; }
+  .field label { display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 5px; letter-spacing: 0.5px; }
+
+  select {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 0.9rem;
+    padding: 10px 14px;
+    outline: none;
+  }
+
+  /* LOBBY */
+  .room-code {
+    font-size: 2.5rem;
+    font-weight: 800;
+    letter-spacing: 8px;
+    text-align: center;
+    color: var(--accent1l);
+    padding: 1rem 0;
+  }
+
+  .status-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted); margin-right: 6px; vertical-align: middle;
+  }
+  .status-dot.online { background: var(--green); }
+
+  .players-status { display: flex; flex-direction: column; gap: 8px; margin: 0.5rem 0 1rem; }
+  .player-row { display: flex; align-items: center; justify-content: space-between; font-size: 0.9rem; }
+  .player-row .badge {
+    font-size: 0.7rem; padding: 2px 8px; border-radius: 100px;
+    background: var(--surface2); color: var(--muted); border: 1px solid var(--border);
+  }
+  .player-row .badge.ready { background: rgba(29,209,161,0.15); color: var(--green); border-color: rgba(29,209,161,0.3); }
+
+  /* BAN PHASE */
+  .turn-banner {
+    border-radius: var(--radius-lg);
+    padding: 14px 20px;
+    margin-bottom: 1.25rem;
+    border: 1px solid transparent;
+  }
+  .turn-banner.p1 { background: rgba(108,99,255,0.12); border-color: rgba(108,99,255,0.3); }
+  .turn-banner.p2 { background: rgba(255,159,67,0.12); border-color: rgba(255,159,67,0.3); }
+  .turn-banner .tl { font-size: 0.75rem; color: var(--muted); margin-bottom: 2px; }
+  .turn-banner .tn { font-size: 1.2rem; font-weight: 600; }
+  .turn-banner.p1 .tn { color: var(--accent1l); }
+  .turn-banner.p2 .tn { color: var(--accent2l); }
+
+  .waiting-notice {
+    text-align: center; color: var(--muted); font-size: 0.9rem;
+    padding: 10px; border: 1px dashed var(--border); border-radius: var(--radius); margin-bottom: 1rem;
+  }
+
+  .ban-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; margin-bottom: 1.25rem; }
+  .ban-card {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 12px 14px;
+    cursor: pointer; transition: border-color 0.15s, background 0.15s, opacity 0.2s;
+    font-size: 0.9rem; display: flex; align-items: center; gap: 10px;
+  }
+  .ban-card:hover:not(.banned):not(.disabled) { border-color: var(--accent1); background: rgba(108,99,255,0.08); }
+  .ban-card.banned { opacity: 0.35; text-decoration: line-through; cursor: default; }
+  .ban-card.disabled { cursor: default; }
+  .ban-card .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border2); flex-shrink: 0; }
+  .ban-card.banned .dot { background: var(--red); }
+
+  .log-list { display: flex; flex-direction: column; gap: 4px; max-height: 130px; overflow-y: auto; }
+  .log-item { font-size: 0.82rem; padding: 5px 10px; background: var(--surface2); border-radius: 6px; color: var(--muted); }
+  .log-item b { color: var(--text); }
+
+  .progress-text { font-size: 0.82rem; color: var(--muted); margin-bottom: 1rem; }
+
+  /* WINNER */
+  .winner-section { text-align: center; padding: 1.5rem 0; }
+  .trophy-icon { font-size: 3rem; margin-bottom: 12px; }
+  .winner-label { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+  .winner-name { font-size: 2rem; font-weight: 700; color: var(--green); margin-bottom: 1.5rem; }
+
+  /* SCREENS */
+  .screen { display: none; width: 100%; max-width: 520px; }
+  .screen.active { display: block; }
+
+  .back-btn { background: none; border: none; color: var(--muted); font-size: 0.85rem; cursor: pointer; padding: 0; margin-bottom: 1rem; display: flex; align-items: center; gap: 4px; }
+  .back-btn:hover { color: var(--text); }
+
+  .or-row { text-align: center; color: var(--muted); font-size: 0.85rem; margin: 0.75rem 0; }
+
+  .hint { font-size: 0.8rem; color: var(--muted); text-align: center; margin-top: 0.5rem; }
+
+  .copy-btn { font-size: 0.75rem; padding: 4px 10px; margin-left: 8px; vertical-align: middle; }
+
+  @media (max-width: 400px) {
+    .ban-grid { grid-template-columns: 1fr 1fr; }
+    .names-row { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- SCREEN: HOME -->
+<div class="screen active" id="screenHome">
+  <h1 style="margin-bottom:4px">🎮 Game Ban Picker</h1>
+  <p class="subtitle">Баньте игры по очереди пока не останется одна</p>
+  <div class="card">
+    <button class="primary" style="width:100%;margin-bottom:10px" onclick="showScreen('screenCreate')">Создать комнату</button>
+    <div class="or-row">— или —</div>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="joinCodeInput" placeholder="Введи код комнаты..." maxlength="4" style="text-transform:uppercase;letter-spacing:4px;font-size:1.1rem;font-weight:700;text-align:center">
+      <button onclick="joinRoom()">Войти</button>
+    </div>
+    <p class="hint" id="joinError" style="color:var(--red);display:none">Комната не найдена</p>
+  </div>
+</div>
+
+<!-- SCREEN: CREATE -->
+<div class="screen" id="screenCreate">
+  <button class="back-btn" onclick="showScreen('screenHome')">← Назад</button>
+  <div class="card">
+    <div class="card-title">Твоё имя</div>
+    <input type="text" id="creatorName" placeholder="Например: Женя" maxlength="20" style="margin-bottom:1rem">
+
+    <div class="card-title">Добавь игры</div>
+    <div class="row">
+      <input type="text" id="gameInput" placeholder="Название игры..." maxlength="60">
+      <button onclick="addGame()">+</button>
+    </div>
+    <div class="games-list" id="gamesList"></div>
+
+    <div class="divider"></div>
+
+    <button class="primary" style="width:100%" onclick="createRoom()" id="createBtn" disabled>
+      Создать комнату →
+    </button>
+  </div>
+</div>
+
+<!-- SCREEN: LOBBY (ждём второго) -->
+<div class="screen" id="screenLobby">
+  <div class="card">
+    <div class="card-title">Код комнаты — отправь другу</div>
+    <div class="room-code" id="displayCode">----</div>
+    <button onclick="copyCode()" style="display:block;margin:0 auto 1rem;font-size:0.8rem">📋 Скопировать код</button>
+    <div class="divider"></div>
+    <div class="players-status" id="lobbyPlayers"></div>
+    <p class="hint" id="waitingHint">Ждём второго игрока...</p>
+    <div style="margin-top:1rem" id="startBanSection" style="display:none"></div>
+  </div>
+</div>
+
+<!-- SCREEN: BAN -->
+<div class="screen" id="screenBan">
+  <div class="turn-banner" id="turnBanner">
+    <div class="tl">Сейчас банит</div>
+    <div class="tn" id="turnName">—</div>
+  </div>
+  <div class="waiting-notice" id="waitingNotice" style="display:none">⏳ Ждёшь хода противника...</div>
+  <p class="progress-text" id="progressText"></p>
+  <div class="ban-grid" id="banGrid"></div>
+  <div id="logSection" style="display:none">
+    <div class="card-title" style="margin-bottom:8px">История банов</div>
+    <div class="log-list" id="logList"></div>
+  </div>
+  <div class="winner-section" id="winnerSection" style="display:none">
+    <div class="trophy-icon">🏆</div>
+    <div class="winner-label">Выжившая игра</div>
+    <div class="winner-name" id="winnerName"></div>
+    <button class="primary" onclick="location.reload()">Новая игра</button>
+  </div>
+</div>
+
+<!-- Firebase -->
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import { getDatabase, ref, set, get, update, onValue, push } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDN1kfCFVLnzcVnK0wm6Iax_7VOk2cwako",
+  authDomain: "gameban-ba62b.firebaseapp.com",
+  databaseURL: "https://gameban-ba62b-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "gameban-ba62b",
+  storageBucket: "gameban-ba62b.firebasestorage.app",
+  messagingSenderId: "1099136444840",
+  appId: "1:1099136444840:web:a6a37d1c6fbed4a6e5559d"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+let myRole = null; // 'host' | 'guest'
+let myName = '';
+let roomCode = '';
+let roomRef = null;
+let isMyTurn = false;
+let localGames = [];
+
+// ── SCREENS ──────────────────────────
+window.showScreen = (id) => {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+};
+
+// ── GAMES SETUP ──────────────────────
+window.addGame = () => {
+  const inp = document.getElementById('gameInput');
+  const val = inp.value.trim();
+  if (!val || localGames.includes(val)) { inp.select(); return; }
+  localGames.push(val);
+  inp.value = '';
+  renderLocalGames();
+  document.getElementById('createBtn').disabled = localGames.length < 2 || !document.getElementById('creatorName').value.trim();
+};
+
+document.getElementById('gameInput').addEventListener('keydown', e => { if (e.key === 'Enter') window.addGame(); });
+document.getElementById('creatorName').addEventListener('input', () => {
+  document.getElementById('createBtn').disabled = localGames.length < 2 || !document.getElementById('creatorName').value.trim();
+});
+
+function renderLocalGames() {
+  document.getElementById('gamesList').innerHTML = localGames.map((g, i) =>
+    `<div class="chip">${esc(g)}<button class="x" onclick="removeGame(${i})">×</button></div>`
+  ).join('');
+  document.getElementById('createBtn').disabled = localGames.length < 2 || !document.getElementById('creatorName').value.trim();
+}
+
+window.removeGame = (i) => { localGames.splice(i, 1); renderLocalGames(); };
+
+// ── CREATE ROOM ───────────────────────
+window.createRoom = async () => {
+  myName = document.getElementById('creatorName').value.trim() || 'Игрок 1';
+  myRole = 'host';
+  roomCode = Math.random().toString(36).slice(2,6).toUpperCase();
+  document.getElementById('displayCode').textContent = roomCode;
+  roomRef = ref(db, 'rooms/' + roomCode);
+
+  await set(roomRef, {
+    games: localGames,
+    host: { name: myName, online: true },
+    guest: null,
+    currentTurn: 'host',
+    bannedIndexes: [],
+    banLog: [],
+    status: 'lobby'
+  });
+
+  showScreen('screenLobby');
+  listenRoom();
+};
+
+// ── JOIN ROOM ─────────────────────────
+window.joinRoom = async () => {
+  const code = document.getElementById('joinCodeInput').value.trim().toUpperCase();
+  if (code.length < 4) return;
+  document.getElementById('joinError').style.display = 'none';
+  const snap = await get(ref(db, 'rooms/' + code));
+  if (!snap.exists()) {
+    document.getElementById('joinError').style.display = 'block';
+    return;
+  }
+  const data = snap.val();
+  if (data.guest) {
+    document.getElementById('joinError').textContent = 'Комната уже занята';
+    document.getElementById('joinError').style.display = 'block';
+    return;
+  }
+  myRole = 'guest';
+  myName = 'Игрок 2';
+  roomCode = code;
+  roomRef = ref(db, 'rooms/' + code);
+  document.getElementById('displayCode').textContent = code;
+
+  const guestName = prompt('Твоё имя:') || 'Игрок 2';
+  myName = guestName.trim().slice(0,20) || 'Игрок 2';
+
+  await update(roomRef, { guest: { name: myName, online: true } });
+  showScreen('screenLobby');
+  listenRoom();
+};
+
+window.copyCode = () => {
+  navigator.clipboard.writeText(roomCode).then(() => alert('Код скопирован: ' + roomCode));
+};
+
+// ── LISTEN ────────────────────────────
+function listenRoom() {
+  onValue(roomRef, snap => {
+    if (!snap.exists()) return;
+    const data = snap.val();
+    if (data.status === 'lobby') renderLobby(data);
+    if (data.status === 'banning') renderBanPhase(data);
+  });
+}
+
+// ── LOBBY ─────────────────────────────
+function renderLobby(data) {
+  const hostOnline = data.host?.online;
+  const guestOnline = data.guest?.online;
+  document.getElementById('lobbyPlayers').innerHTML = `
+    <div class="player-row">
+      <span><span class="status-dot ${hostOnline ? 'online' : ''}"></span>${esc(data.host?.name || 'Хост')}</span>
+      <span class="badge ready">В комнате</span>
+    </div>
+    <div class="player-row">
+      <span><span class="status-dot ${guestOnline ? 'online' : ''}"></span>${guestOnline ? esc(data.guest.name) : 'Ожидание...'}</span>
+      <span class="badge ${guestOnline ? 'ready' : ''}"> ${guestOnline ? 'В комнате' : 'Не подключён'}</span>
+    </div>
+  `;
+
+  const startSection = document.getElementById('startBanSection');
+  document.getElementById('waitingHint').style.display = guestOnline ? 'none' : 'block';
+
+  if (myRole === 'host' && guestOnline) {
+    startSection.style.display = 'block';
+    startSection.innerHTML = `<button class="primary" style="width:100%" onclick="startBan()">🚀 Начать баны!</button>`;
+  } else if (myRole === 'guest' && guestOnline) {
+    startSection.style.display = 'block';
+    startSection.innerHTML = `<p style="text-align:center;color:var(--muted);font-size:0.9rem">Ждём пока хост начнёт...</p>`;
+  }
+}
+
+// ── START BAN ─────────────────────────
+window.startBan = async () => {
+  await update(roomRef, { status: 'banning', currentTurn: 'host' });
+};
+
+// ── BAN PHASE ─────────────────────────
+function renderBanPhase(data) {
+  showScreen('screenBan');
+  const games = data.games || [];
+  const banned = data.bannedIndexes || [];
+  const banLog = data.banLog ? Object.values(data.banLog) : [];
+  const hostName = data.host?.name || 'Хост';
+  const guestName = data.guest?.name || 'Гость';
+  const currentTurn = data.currentTurn;
+
+  const remaining = games.filter((_, i) => !banned.includes(i));
+
+  // Winner
+  if (remaining.length === 1) {
+    document.getElementById('banGrid').innerHTML = '';
+    document.getElementById('turnBanner').style.display = 'none';
+    document.getElementById('waitingNotice').style.display = 'none';
+    document.getElementById('progressText').textContent = '';
+    document.getElementById('winnerSection').style.display = 'block';
+    document.getElementById('winnerName').textContent = remaining[0];
+    if (banLog.length) renderLog(banLog, hostName, guestName);
+    return;
+  }
+
+  isMyTurn = (currentTurn === myRole);
+  const turnerName = currentTurn === 'host' ? hostName : guestName;
+  const bannerEl = document.getElementById('turnBanner');
+  bannerEl.className = 'turn-banner ' + (currentTurn === 'host' ? 'p1' : 'p2');
+  document.getElementById('turnName').textContent = turnerName;
+  document.getElementById('waitingNotice').style.display = isMyTurn ? 'none' : 'block';
+  document.getElementById('progressText').textContent = `Осталось: ${remaining.length} · Забанено: ${banned.length}`;
+
+  document.getElementById('banGrid').innerHTML = games.map((g, i) => {
+    const isBanned = banned.includes(i);
+    const clickable = !isBanned && isMyTurn;
+    return `<div class="ban-card ${isBanned ? 'banned' : ''} ${!clickable && !isBanned ? 'disabled' : ''}" ${clickable ? `onclick="banGame(${i})"` : ''}>
+      <div class="dot"></div><span>${esc(g)}</span>
+    </div>`;
+  }).join('');
+
+  if (banLog.length) renderLog(banLog, hostName, guestName);
+}
+
+function renderLog(banLog, hostName, guestName) {
+  document.getElementById('logSection').style.display = 'block';
+  document.getElementById('logList').innerHTML = [...banLog].reverse().map(l =>
+    `<div class="log-item"><b>${esc(l.role === 'host' ? hostName : guestName)}</b> забанил ${esc(l.game)}</div>`
+  ).join('');
+}
+
+// ── BAN ACTION ────────────────────────
+window.banGame = async (i) => {
+  if (!isMyTurn) return;
+  isMyTurn = false;
+
+  const snap = await get(roomRef);
+  const data = snap.val();
+  const banned = data.bannedIndexes || [];
+  if (banned.includes(i)) return;
+
+  const newBanned = [...banned, i];
+  const nextTurn = data.currentTurn === 'host' ? 'guest' : 'host';
+  const logEntry = { role: myRole, game: data.games[i] };
+
+  await update(roomRef, {
+    bannedIndexes: newBanned,
+    currentTurn: nextTurn,
+    [`banLog/${Date.now()}`]: logEntry
+  });
+};
+
+// ── UTILS ─────────────────────────────
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
