@@ -120,6 +120,51 @@
   }
   .turn-pill.active { background: rgba(108,99,255,0.2); border-color: rgba(108,99,255,0.4); color: var(--accent1l); font-weight: 600; }
   @media (max-width: 400px) { .ban-grid { grid-template-columns: 1fr 1fr; } }
+
+  /* WHEEL MODAL */
+  .wheel-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.82); z-index: 100;
+    align-items: center; justify-content: center; flex-direction: column;
+  }
+  .wheel-overlay.active { display: flex; }
+  .wheel-modal {
+    background: var(--surface); border: 1px solid var(--border2);
+    border-radius: 20px; padding: 1.5rem; max-width: 480px; width: 95%;
+    display: flex; flex-direction: column; align-items: center; gap: 1rem;
+  }
+  .wheel-title { font-size: 1.1rem; font-weight: 700; }
+  .wheel-subtitle { font-size: 0.82rem; color: var(--muted); text-align: center; }
+  .wheel-wrap { position: relative; width: 300px; height: 300px; }
+  .wheel-canvas { border-radius: 50%; display: block; }
+  .wheel-pointer {
+    position: absolute; top: -14px; left: 50%; transform: translateX(-50%);
+    font-size: 1.6rem; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.6));
+    z-index: 2; pointer-events: none;
+  }
+  .confirm-list { width: 100%; display: flex; flex-direction: column; gap: 6px; }
+  .confirm-row {
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--surface2); border-radius: 8px; padding: 8px 14px;
+    font-size: 0.88rem;
+  }
+  .confirm-row .cbadge {
+    font-size: 0.72rem; padding: 2px 10px; border-radius: 100px;
+    background: rgba(29,209,161,0.15); color: var(--green);
+    border: 1px solid rgba(29,209,161,0.3);
+  }
+  .confirm-row .cbadge.waiting {
+    background: rgba(255,255,255,0.05); color: var(--muted);
+    border-color: var(--border);
+  }
+  .wheel-spun-result {
+    font-size: 1.1rem; font-weight: 600; text-align: center;
+    color: var(--accent2l); min-height: 1.6em;
+  }
+  .wheel-actions { display: flex; gap: 8px; }
+  button.wheel-btn { background: var(--accent2); border-color: var(--accent2); font-weight: 600; color: #111; }
+  button.wheel-btn:hover { background: var(--accent2l); border-color: var(--accent2l); }
+  button.wheel-spin-again { background: rgba(108,99,255,0.2); border-color: rgba(108,99,255,0.4); color: var(--accent1l); }
 </style>
 </head>
 <body>
@@ -186,6 +231,10 @@
   <div class="turn-order" id="turnOrder"></div>
   <div class="waiting-notice" id="waitingNotice" style="display:none">⏳ Ждёшь хода...</div>
   <p class="progress-text" id="progressText"></p>
+  <div id="wheelBtnWrap" style="display:none;margin-bottom:1rem">
+    <button id="wheelRequestBtn" onclick="requestWheel()" style="width:100%;font-size:1rem;padding:12px">🎡 Колесо фортуны — выбрать случайно</button>
+    <p style="font-size:0.78rem;color:var(--muted);text-align:center;margin-top:6px">Нужно подтверждение всех игроков</p>
+  </div>
   <div class="ban-grid" id="banGrid"></div>
   <div id="logSection" style="display:none">
     <div class="card-title" style="margin-bottom:8px">История банов</div>
@@ -196,6 +245,36 @@
     <div class="winner-label">Выжившая игра</div>
     <div class="winner-name" id="winnerName"></div>
     <button class="primary" onclick="location.reload()">Новая игра</button>
+  </div>
+</div>
+
+<!-- WHEEL OVERLAY -->
+<div class="wheel-overlay" id="wheelOverlay">
+  <div class="wheel-modal">
+    <div class="wheel-title">🎡 Колесо фортуны</div>
+    <div class="wheel-subtitle" id="wheelSubtitle">Все игроки должны подтвердить запуск</div>
+
+    <!-- confirm phase -->
+    <div id="wheelConfirmPhase">
+      <div class="confirm-list" id="confirmList"></div>
+      <div style="display:flex;gap:8px;margin-top:0.5rem;width:100%;justify-content:center">
+        <button id="myConfirmBtn" class="primary" onclick="confirmWheel()" style="flex:1">✅ Я согласен</button>
+        <button onclick="cancelWheel()" class="danger" style="flex:1">Отмена</button>
+      </div>
+    </div>
+
+    <!-- spin phase -->
+    <div id="wheelSpinPhase" style="display:none;flex-direction:column;align-items:center;gap:1rem">
+      <div class="wheel-wrap">
+        <div class="wheel-pointer">▼</div>
+        <canvas class="wheel-canvas" id="wheelCanvas" width="300" height="300"></canvas>
+      </div>
+      <div class="wheel-spun-result" id="wheelResult"></div>
+      <div class="wheel-actions" id="wheelActions" style="display:none">
+        <button class="wheel-btn" id="wheelBanBtn" onclick="wheelBanCurrent()">🚫 Убрать эту игру</button>
+        <button onclick="cancelWheel()">Закрыть</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -428,6 +507,34 @@ function renderBanPhase(data) {
   document.getElementById('waitingNotice').style.display = isMyTurn ? 'none' : 'block';
   document.getElementById('progressText').textContent = `Осталось: ${remaining.length} · Забанено: ${banned.length}`;
 
+  // Wheel button: show if 2+ games remain
+  const wheelWrap = document.getElementById('wheelBtnWrap');
+  if (remaining.length >= 2) {
+    wheelWrap.style.display = 'block';
+    const wheelReqBtn = document.getElementById('wheelRequestBtn');
+    if (data.wheelActive) {
+      wheelReqBtn.disabled = true;
+      wheelReqBtn.textContent = '🎡 Колесо запущено...';
+    } else {
+      wheelReqBtn.disabled = false;
+      wheelReqBtn.textContent = '🎡 Колесо фортуны — выбрать случайно';
+    }
+  } else {
+    wheelWrap.style.display = 'none';
+  }
+
+  // Wheel overlay
+  if (data.wheelActive) {
+    openWheelOverlay(data);
+  } else if (!data.wheelActive) {
+    // Close overlay if wheel was cancelled by someone
+    const overlay = document.getElementById('wheelOverlay');
+    if (overlay.classList.contains('active') && !wheelSpinning) {
+      overlay.classList.remove('active');
+      myConfirmed = false;
+    }
+  }
+
   // Turn order pills
   document.getElementById('turnOrder').innerHTML = turnOrder.map((pid, idx) => {
     const isActive = idx === (currentTurnIndex % turnOrder.length);
@@ -448,7 +555,7 @@ function renderBanPhase(data) {
 function renderLog(banLog, players) {
   document.getElementById('logSection').style.display = 'block';
   document.getElementById('logList').innerHTML = [...banLog].reverse().map(l =>
-    `<div class="log-item"><b>${esc(players[l.pid]?.name || '?')}</b> забанил ${esc(l.game)}</div>`
+    `<div class="log-item">${l.byWheel ? '🎡 ' : ''}<b>${esc(players[l.pid]?.name || '?')}</b> ${l.byWheel ? 'колесо выбрало' : 'забанил'} ${esc(l.game)}</div>`
   ).join('');
 }
 
@@ -471,6 +578,237 @@ window.banGame = async (i) => {
     currentTurnIndex: nextIndex,
     [`banLog/${Date.now()}`]: logEntry
   });
+};
+
+// ── WHEEL OF FORTUNE ──
+let wheelSpinning = false;
+let wheelCurrentGame = null;
+let wheelCurrentGameIndex = null;
+let wheelItems = [];
+let wheelAngle = 0;
+let myConfirmed = false;
+
+function getWheelConfirms(data) {
+  return data.wheelConfirms || {};
+}
+
+window.requestWheel = async () => {
+  const snap = await get(roomRef);
+  const data = snap.val();
+  const players = data.players || {};
+  const allPids = Object.keys(players);
+  // Reset confirms, set wheel mode
+  const confirms = {};
+  allPids.forEach(pid => { confirms[pid] = false; });
+  await update(roomRef, { wheelActive: true, wheelConfirms: confirms, wheelSpunGame: null });
+};
+
+window.confirmWheel = async () => {
+  if (myConfirmed) return;
+  myConfirmed = true;
+  document.getElementById('myConfirmBtn').disabled = true;
+  await update(roomRef, { [`wheelConfirms/${myPlayerId}`]: true });
+};
+
+window.cancelWheel = async () => {
+  myConfirmed = false;
+  await update(roomRef, { wheelActive: false, wheelConfirms: {}, wheelSpunGame: null });
+  document.getElementById('wheelOverlay').classList.remove('active');
+};
+
+function openWheelOverlay(data) {
+  const overlay = document.getElementById('wheelOverlay');
+  overlay.classList.add('active');
+  const players = data.players || {};
+  const confirms = getWheelConfirms(data);
+  const allPids = Object.keys(players);
+
+  // Confirm list
+  document.getElementById('confirmList').innerHTML = allPids.map(pid => {
+    const ok = confirms[pid];
+    const isMe = pid === myPlayerId;
+    return `<div class="confirm-row">
+      <span>${esc(players[pid]?.name || '?')}${isMe ? ' <span style="color:var(--muted);font-size:0.78rem">(ты)</span>' : ''}</span>
+      <span class="cbadge ${ok ? '' : 'waiting'}">${ok ? '✅ Готов' : '⏳ Ждём'}</span>
+    </div>`;
+  }).join('');
+
+  // My confirm button
+  document.getElementById('myConfirmBtn').disabled = myConfirmed || !!confirms[myPlayerId];
+  if (confirms[myPlayerId]) myConfirmed = true;
+
+  // Check if all confirmed
+  const allConfirmed = allPids.length > 0 && allPids.every(pid => confirms[pid]);
+  if (allConfirmed && !wheelSpinning) {
+    // Switch to spin phase
+    document.getElementById('wheelConfirmPhase').style.display = 'none';
+    document.getElementById('wheelSpinPhase').style.display = 'flex';
+    document.getElementById('wheelSubtitle').textContent = 'Все согласны! Крутим...';
+    startWheelSpin(data);
+  } else {
+    document.getElementById('wheelConfirmPhase').style.display = 'block';
+    document.getElementById('wheelSpinPhase').style.display = 'none';
+  }
+
+  // If host sees already spun result
+  if (data.wheelSpunGame !== null && data.wheelSpunGame !== undefined) {
+    document.getElementById('wheelConfirmPhase').style.display = 'none';
+    document.getElementById('wheelSpinPhase').style.display = 'flex';
+    document.getElementById('wheelSubtitle').textContent = 'Колесо остановилось!';
+    drawWheelStatic(data);
+  }
+}
+
+function getWheelItems(data) {
+  const games = data.games || [];
+  const banned = data.bannedIndexes || [];
+  return games.map((g, i) => ({ name: g, index: i })).filter(g => !banned.includes(g.index));
+}
+
+const WHEEL_COLORS = [
+  '#6c63ff','#ff9f43','#1dd1a1','#ff6b6b','#54a0ff','#feca57',
+  '#48dbfb','#ff9ff3','#a29bfe','#fd79a8','#00b894','#e17055'
+];
+
+function drawWheel(items, angle) {
+  const canvas = document.getElementById('wheelCanvas');
+  const ctx = canvas.getContext('2d');
+  const cx = 150, cy = 150, r = 140;
+  const slice = (2 * Math.PI) / items.length;
+  ctx.clearRect(0, 0, 300, 300);
+
+  items.forEach((item, i) => {
+    const start = angle + i * slice;
+    const end = start + slice;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, start, end);
+    ctx.closePath();
+    ctx.fillStyle = WHEEL_COLORS[i % WHEEL_COLORS.length];
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Label
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(start + slice / 2);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${Math.min(13, 100 / items.length + 7)}px Segoe UI, sans-serif`;
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.shadowBlur = 3;
+    const label = item.name.length > 14 ? item.name.slice(0, 13) + '…' : item.name;
+    ctx.fillText(label, r - 10, 5);
+    ctx.restore();
+  });
+
+  // Center circle
+  ctx.beginPath();
+  ctx.arc(cx, cy, 18, 0, 2 * Math.PI);
+  ctx.fillStyle = '#1a1a22';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+function startWheelSpin(data) {
+  if (wheelSpinning) return;
+  wheelSpinning = true;
+  wheelItems = getWheelItems(data);
+  if (wheelItems.length === 0) return;
+  document.getElementById('wheelResult').textContent = '';
+  document.getElementById('wheelActions').style.display = 'none';
+
+  // Pick random winner
+  const winnerIdx = Math.floor(Math.random() * wheelItems.length);
+  const slice = (2 * Math.PI) / wheelItems.length;
+  // We want pointer (top, -PI/2) to point at winner slice center
+  // Winner slice center angle = winnerIdx * slice + slice/2 (from angle=0)
+  // We need: angle + winnerIdx*slice + slice/2 = -PI/2 + 2*PI*k
+  // Total spin = many full rotations + adjustment
+  const totalRotations = 5 + Math.random() * 3;
+  const targetAngle = -Math.PI / 2 - (winnerIdx * slice + slice / 2);
+  const fullSpin = Math.PI * 2 * totalRotations;
+  const finalAngle = targetAngle - (wheelAngle % (Math.PI * 2)) + fullSpin;
+
+  const duration = 4000 + Math.random() * 1500;
+  const startTime = performance.now();
+  const startAngle = wheelAngle;
+
+  function easeOut(t) { return 1 - Math.pow(1 - t, 4); }
+
+  function animate(now) {
+    const elapsed = now - startTime;
+    const t = Math.min(elapsed / duration, 1);
+    wheelAngle = startAngle + finalAngle * easeOut(t);
+    drawWheel(wheelItems, wheelAngle);
+    if (t < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      wheelAngle = startAngle + finalAngle;
+      drawWheel(wheelItems, wheelAngle);
+      wheelSpinning = false;
+      wheelCurrentGame = wheelItems[winnerIdx].name;
+      wheelCurrentGameIndex = wheelItems[winnerIdx].index;
+      document.getElementById('wheelResult').textContent = '🎯 ' + wheelCurrentGame;
+      document.getElementById('wheelActions').style.display = 'flex';
+      // Save result to Firebase so host can ban
+      update(roomRef, { wheelSpunGame: wheelCurrentGameIndex });
+    }
+  }
+  drawWheel(wheelItems, wheelAngle);
+  requestAnimationFrame(animate);
+}
+
+function drawWheelStatic(data) {
+  wheelItems = getWheelItems(data);
+  if (wheelItems.length === 0) return;
+  if (data.wheelSpunGame !== null && data.wheelSpunGame !== undefined) {
+    const idx = wheelItems.findIndex(i => i.index === data.wheelSpunGame);
+    if (idx >= 0) {
+      const slice = (2 * Math.PI) / wheelItems.length;
+      wheelAngle = -Math.PI / 2 - (idx * slice + slice / 2);
+      wheelCurrentGame = wheelItems[idx].name;
+      wheelCurrentGameIndex = wheelItems[idx].index;
+    }
+  }
+  drawWheel(wheelItems, wheelAngle);
+  document.getElementById('wheelResult').textContent = wheelCurrentGame ? '🎯 ' + wheelCurrentGame : '';
+  document.getElementById('wheelActions').style.display = wheelCurrentGame ? 'flex' : 'none';
+}
+
+window.wheelBanCurrent = async () => {
+  if (wheelCurrentGameIndex === null) return;
+  const snap = await get(roomRef);
+  const data = snap.val();
+  const banned = data.bannedIndexes || [];
+  if (banned.includes(wheelCurrentGameIndex)) return;
+
+  const newBanned = [...banned, wheelCurrentGameIndex];
+  const remaining = (data.games || []).filter((_, i) => !newBanned.includes(i));
+  const nextIndex = (data.currentTurnIndex || 0) + 1;
+  const logEntry = { pid: myPlayerId, game: data.games[wheelCurrentGameIndex], ts: Date.now(), byWheel: true };
+
+  await update(roomRef, {
+    bannedIndexes: newBanned,
+    currentTurnIndex: nextIndex,
+    [`banLog/${Date.now()}`]: logEntry,
+    wheelActive: false,
+    wheelConfirms: {},
+    wheelSpunGame: null
+  });
+
+  // Reset wheel state
+  wheelSpinning = false;
+  wheelCurrentGame = null;
+  wheelCurrentGameIndex = null;
+  myConfirmed = false;
+  document.getElementById('wheelOverlay').classList.remove('active');
+
+  if (remaining.length === 1) return; // winner will be shown
 };
 
 // ── AUTO JOIN FROM URL ──
