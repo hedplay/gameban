@@ -271,7 +271,6 @@
       </div>
       <div class="wheel-spun-result" id="wheelResult"></div>
       <div class="wheel-actions" id="wheelActions" style="display:none">
-        <button class="wheel-btn" id="wheelBanBtn" onclick="wheelBanCurrent()">🚫 Убрать эту игру</button>
         <button onclick="cancelWheel()">Закрыть</button>
       </div>
     </div>
@@ -619,7 +618,7 @@ window.requestWheel = async () => {
   const confirms = {};
   allPids.forEach(pid => { confirms[pid] = false; });
   wheelAnimationStarted = false;
-  await update(roomRef, { wheelActive: true, wheelConfirms: confirms, wheelSpunGame: null });
+  await update(roomRef, { wheelActive: true, wheelConfirms: confirms, wheelSpunGame: null, wheelSequence: null });
 };
 
 window.confirmWheel = async () => {
@@ -627,36 +626,42 @@ window.confirmWheel = async () => {
   myConfirmed = true;
   document.getElementById('myConfirmBtn').disabled = true;
 
-  // Write my confirm first
   await update(roomRef, { [`wheelConfirms/${myPlayerId}`]: true });
 
-  // Re-read fresh state — check if ALL players confirmed now
+  // Re-read to check if ALL confirmed
   const snap = await get(roomRef);
   const data = snap.val();
-  // Already spinning or result already set — nothing to do
-  if (data.wheelSpunGame !== null && data.wheelSpunGame !== undefined) return;
+  if (data.wheelSequence) return; // already generated
 
   const allPids = Object.keys(data.players || {});
   const confirms = data.wheelConfirms || {};
   const allConfirmed = allPids.length > 0 && allPids.every(pid => confirms[pid]);
   if (!allConfirmed) return;
 
-  // Use Firebase transaction to make sure only ONE client writes the winner
-  // Simple approach: only the player whose ID is first alphabetically writes it
+  // Only alphabetically-first player generates the sequence
   const sortedPids = [...allPids].sort();
   if (myPlayerId !== sortedPids[0]) return;
 
+  // Generate full elimination order RIGHT NOW
   const items = getWheelItems(data);
   if (items.length === 0) return;
-  const winnerIdx = Math.floor(Math.random() * items.length);
-  await update(roomRef, { wheelSpunGame: items[winnerIdx].index });
+  const remaining = [...items];
+  const sequence = []; // ordered list of gameIndexes to eliminate
+  while (remaining.length > 1) {
+    const pick = Math.floor(Math.random() * remaining.length);
+    sequence.push(remaining[pick].index);
+    remaining.splice(pick, 1);
+  }
+  // sequence[0] = first eliminated, sequence[last] = last eliminated before winner
+  // remaining[0] = winner
+  await update(roomRef, { wheelSequence: sequence });
 };
 
 window.cancelWheel = async () => {
   myConfirmed = false;
   wheelAnimationStarted = false;
   wheelSpinning = false;
-  await update(roomRef, { wheelActive: false, wheelConfirms: {}, wheelSpunGame: null });
+  await update(roomRef, { wheelActive: false, wheelConfirms: {}, wheelSpunGame: null, wheelSequence: null });
   document.getElementById('wheelOverlay').classList.remove('active');
 };
 
@@ -667,7 +672,7 @@ function openWheelOverlay(data) {
   const confirms = getWheelConfirms(data);
   const allPids = Object.keys(players);
 
-  // Confirm list
+  // Update confirm list
   document.getElementById('confirmList').innerHTML = allPids.map(pid => {
     const ok = confirms[pid];
     const isMe = pid === myPlayerId;
@@ -680,22 +685,21 @@ function openWheelOverlay(data) {
   document.getElementById('myConfirmBtn').disabled = myConfirmed || !!confirms[myPlayerId];
   if (confirms[myPlayerId]) myConfirmed = true;
 
-  // wheelSpunGame set = winner already picked by Firebase → everyone animates to that result
-  if (data.wheelSpunGame !== null && data.wheelSpunGame !== undefined) {
+  // Sequence ready → start full auto-spin (once per client)
+  if (data.wheelSequence && !wheelAnimationStarted) {
+    wheelAnimationStarted = true;
     document.getElementById('wheelConfirmPhase').style.display = 'none';
     document.getElementById('wheelSpinPhase').style.display = 'flex';
     document.getElementById('wheelSubtitle').textContent = 'Крутим...';
-    // Guard: only start animation once per client per wheel session
-    if (!wheelAnimationStarted) {
-      wheelAnimationStarted = true;
-      startWheelSpin(data);
-    }
+    document.getElementById('wheelActions').style.display = 'none';
+    runWheelSequence(data);
     return;
   }
 
-  // Default: show confirm list
-  document.getElementById('wheelConfirmPhase').style.display = 'block';
-  document.getElementById('wheelSpinPhase').style.display = 'none';
+  if (!data.wheelSequence) {
+    document.getElementById('wheelConfirmPhase').style.display = 'block';
+    document.getElementById('wheelSpinPhase').style.display = 'none';
+  }
 }
 
 function getWheelItems(data) {
@@ -709,7 +713,7 @@ const WHEEL_COLORS = [
   '#48dbfb','#ff9ff3','#a29bfe','#fd79a8','#00b894','#e17055'
 ];
 
-function drawWheel(items, angle) {
+function drawWheel(items, angle, highlightIndex) {
   const canvas = document.getElementById('wheelCanvas');
   const ctx = canvas.getContext('2d');
   const cx = 150, cy = 150, r = 140;
@@ -723,27 +727,28 @@ function drawWheel(items, angle) {
     ctx.moveTo(cx, cy);
     ctx.arc(cx, cy, r, start, end);
     ctx.closePath();
-    ctx.fillStyle = WHEEL_COLORS[i % WHEEL_COLORS.length];
+    const isHighlighted = i === highlightIndex;
+    ctx.fillStyle = isHighlighted
+      ? '#fff'
+      : WHEEL_COLORS[i % WHEEL_COLORS.length];
     ctx.fill();
     ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = isHighlighted ? 3 : 2;
     ctx.stroke();
 
-    // Label
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate(start + slice / 2);
     ctx.textAlign = 'right';
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = isHighlighted ? '#111' : '#fff';
     ctx.font = `bold ${Math.min(13, 100 / items.length + 7)}px Segoe UI, sans-serif`;
     ctx.shadowColor = 'rgba(0,0,0,0.5)';
-    ctx.shadowBlur = 3;
+    ctx.shadowBlur = isHighlighted ? 0 : 3;
     const label = item.name.length > 14 ? item.name.slice(0, 13) + '…' : item.name;
     ctx.fillText(label, r - 10, 5);
     ctx.restore();
   });
 
-  // Center circle
   ctx.beginPath();
   ctx.arc(cx, cy, 18, 0, 2 * Math.PI);
   ctx.fillStyle = '#1a1a22';
@@ -753,104 +758,110 @@ function drawWheel(items, angle) {
   ctx.stroke();
 }
 
-function startWheelSpin(data) {
-  if (wheelSpinning) return;
-  wheelSpinning = true;
-  wheelItems = getWheelItems(data);
-  if (wheelItems.length === 0) return;
-  document.getElementById('wheelResult').textContent = '';
-  document.getElementById('wheelActions').style.display = 'none';
+// Animate one spin to a target sector index within `items`, return Promise that resolves when done
+function animateSpinTo(items, targetIdx, fromAngle) {
+  return new Promise(resolve => {
+    const slice = (2 * Math.PI) / items.length;
+    const targetAngle = -Math.PI / 2 - targetIdx * slice - slice / 2;
+    const normalised = ((targetAngle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    const finalAngle = normalised + 6 * 2 * Math.PI; // always spin from 0
 
-  // Winner is determined by HOST and stored in Firebase — all clients use the same index
-  const winnerGameIndex = data.wheelSpunGame;
-  const winnerIdx = wheelItems.findIndex(item => item.index === winnerGameIndex);
-  if (winnerIdx < 0) { wheelSpinning = false; return; }
+    const duration = 3500;
+    const startTime = performance.now();
 
-  const slice = (2 * Math.PI) / wheelItems.length;
-  // Pointer at TOP = -π/2. Center of sector winnerIdx must end up there.
-  // finalAngle + winnerIdx*slice + slice/2 = -π/2  →  finalAngle = -π/2 - winnerIdx*slice - slice/2
-  const rotations = 6; // fixed so animation duration is predictable
-  const targetAngle = -Math.PI / 2 - winnerIdx * slice - slice / 2;
-  const normalised = ((targetAngle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-  const finalAngle = normalised + rotations * 2 * Math.PI;
+    function easeOut(t) { return 1 - Math.pow(1 - t, 4); }
 
-  const duration = 4500;
-  const startTime = performance.now();
-
-  function easeOut(t) { return 1 - Math.pow(1 - t, 4); }
-
-  function animate(now) {
-    const elapsed = now - startTime;
-    const t = Math.min(elapsed / duration, 1);
-    wheelAngle = finalAngle * easeOut(t);
-    drawWheel(wheelItems, wheelAngle);
-    if (t < 1) {
-      requestAnimationFrame(animate);
-    } else {
-      wheelAngle = finalAngle;
-      drawWheel(wheelItems, wheelAngle);
-      wheelSpinning = false;
-      wheelCurrentGame = wheelItems[winnerIdx].name;
-      wheelCurrentGameIndex = wheelItems[winnerIdx].index;
-      document.getElementById('wheelResult').textContent = '🎯 ' + wheelCurrentGame;
-      document.getElementById('wheelSubtitle').textContent = 'Колесо остановилось!';
-      document.getElementById('wheelActions').style.display = 'flex';
+    function animate(now) {
+      const t = Math.min((now - startTime) / duration, 1);
+      const angle = finalAngle * easeOut(t);
+      drawWheel(items, angle, t === 1 ? targetIdx : -1);
+      if (t < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        resolve(finalAngle % (2 * Math.PI));
+      }
     }
-  }
-  drawWheel(wheelItems, wheelAngle);
-  requestAnimationFrame(animate);
-}
-
-function drawWheelStatic(data) {
-  wheelItems = getWheelItems(data);
-  if (wheelItems.length === 0) return;
-  if (data.wheelSpunGame !== null && data.wheelSpunGame !== undefined) {
-    const idx = wheelItems.findIndex(i => i.index === data.wheelSpunGame);
-    if (idx >= 0) {
-      const slice = (2 * Math.PI) / wheelItems.length;
-      // Same formula as startWheelSpin: pointer at top = -π/2
-      const targetAngle = -Math.PI / 2 - idx * slice - slice / 2;
-      wheelAngle = ((targetAngle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-      wheelCurrentGame = wheelItems[idx].name;
-      wheelCurrentGameIndex = wheelItems[idx].index;
-    }
-  }
-  drawWheel(wheelItems, wheelAngle);
-  document.getElementById('wheelResult').textContent = wheelCurrentGame ? '🎯 ' + wheelCurrentGame : '';
-  document.getElementById('wheelActions').style.display = wheelCurrentGame ? 'flex' : 'none';
-}
-
-window.wheelBanCurrent = async () => {
-  const snap = await get(roomRef);
-  const data = snap.val();
-  // Always read the game index from Firebase — works for all players, not just spinner
-  const gameIdx = data.wheelSpunGame;
-  if (gameIdx === null || gameIdx === undefined) return;
-
-  const banned = data.bannedIndexes || [];
-  if (banned.includes(gameIdx)) return;
-
-  const newBanned = [...banned, gameIdx];
-  const nextIndex = (data.currentTurnIndex || 0) + 1;
-  const logEntry = { pid: myPlayerId, game: data.games[gameIdx], ts: Date.now(), byWheel: true };
-
-  await update(roomRef, {
-    bannedIndexes: newBanned,
-    currentTurnIndex: nextIndex,
-    [`banLog/${Date.now()}`]: logEntry,
-    wheelActive: false,
-    wheelConfirms: {},
-    wheelSpunGame: null
+    drawWheel(items, 0, -1);
+    requestAnimationFrame(animate);
   });
+}
 
-  // Reset local wheel state
-  wheelSpinning = false;
+// Full auto sequence: spin → pause → remove → repeat
+async function runWheelSequence(data) {
+  const sequence = data.wheelSequence; // array of gameIndexes to eliminate in order
+  const games = data.games || [];
+  const initialBanned = data.bannedIndexes || [];
+
+  // Build mutable list of currently active items
+  let activeItems = games
+    .map((g, i) => ({ name: g, index: i }))
+    .filter(g => !initialBanned.includes(g.index));
+
+  const banLog = [];
+
+  for (let step = 0; step < sequence.length; step++) {
+    const eliminatedGameIndex = sequence[step];
+    const targetIdx = activeItems.findIndex(item => item.index === eliminatedGameIndex);
+    if (targetIdx < 0) continue; // safety
+
+    document.getElementById('wheelSubtitle').textContent =
+      `Крутим... (осталось ${activeItems.length})`;
+    document.getElementById('wheelResult').textContent = '';
+
+    // Spin to target
+    await animateSpinTo(activeItems, targetIdx, 0);
+
+    // Show result for 2 seconds
+    document.getElementById('wheelResult').textContent =
+      `🚫 Выбывает: ${activeItems[targetIdx].name}`;
+    document.getElementById('wheelSubtitle').textContent = 'Выбывает!';
+
+    banLog.push({ gameIndex: eliminatedGameIndex, gameName: activeItems[targetIdx].name });
+
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Remove from visual list and redraw
+    activeItems.splice(targetIdx, 1);
+    if (activeItems.length > 0) drawWheel(activeItems, 0, -1);
+  }
+
+  // Only one item left — it's the winner
+  const winner = activeItems[0];
+  document.getElementById('wheelResult').textContent = `🏆 Победитель: ${winner?.name || '?'}`;
+  document.getElementById('wheelSubtitle').textContent = 'Готово!';
+  if (winner) drawWheel([winner], -Math.PI / 2 - 0 - Math.PI, 0);
+
+  // Write all bans to Firebase at once (only alphabetically-first player writes)
+  const snap = await get(roomRef);
+  const freshData = snap.val();
+  const allPids = Object.keys(freshData.players || {}).sort();
+  if (myPlayerId === allPids[0]) {
+    const newBanned = [...(freshData.bannedIndexes || []), ...sequence];
+    const nextTurnIndex = (freshData.currentTurnIndex || 0) + sequence.length;
+    const logUpdates = {};
+    banLog.forEach((entry, i) => {
+      logUpdates[`banLog/${Date.now() + i}`] = {
+        pid: myPlayerId, game: entry.gameName, ts: Date.now() + i, byWheel: true
+      };
+    });
+    await update(roomRef, {
+      bannedIndexes: newBanned,
+      currentTurnIndex: nextTurnIndex,
+      ...logUpdates,
+      wheelActive: false,
+      wheelConfirms: {},
+      wheelSpunGame: null,
+      wheelSequence: null
+    });
+  }
+
+  // Close overlay after short delay
+  await new Promise(r => setTimeout(r, 1500));
   wheelAnimationStarted = false;
-  wheelCurrentGame = null;
-  wheelCurrentGameIndex = null;
+  wheelSpinning = false;
   myConfirmed = false;
   document.getElementById('wheelOverlay').classList.remove('active');
-};
+}
 
 // ── AUTO JOIN FROM URL ──
 function checkUrlJoin() {
