@@ -437,7 +437,25 @@ function listenRoom() {
     if (!snap.exists()) return;
     const data = snap.val();
     if (data.status === 'lobby') renderLobby(data);
-    if (data.status === 'banning') renderBanPhase(data);
+    if (data.status === 'banning') {
+      renderBanPhase(data);
+      // Host responsibility: if wheel is active, all confirmed, but winner not yet chosen → pick now
+      if (data.wheelActive && data.wheelSpunGame === null || data.wheelSpunGame === undefined) {
+        const isHost = data.hostId === myPlayerId;
+        if (isHost && !data.wheelSpinning) {
+          const allPids = Object.keys(data.players || {});
+          const confirms = data.wheelConfirms || {};
+          const allConfirmed = allPids.length > 0 && allPids.every(pid => confirms[pid]);
+          if (allConfirmed) {
+            const items = getWheelItems(data);
+            if (items.length > 0) {
+              const winnerIdx = Math.floor(Math.random() * items.length);
+              update(roomRef, { wheelSpunGame: items[winnerIdx].index, wheelSpinning: true });
+            }
+          }
+        }
+      }
+    }
   });
 }
 
@@ -582,6 +600,7 @@ window.banGame = async (i) => {
 
 // ── WHEEL OF FORTUNE ──
 let wheelSpinning = false;
+let wheelAnimationStarted = false; // guard: animation fires only once per wheel session
 let wheelCurrentGame = null;
 let wheelCurrentGameIndex = null;
 let wheelItems = [];
@@ -597,9 +616,9 @@ window.requestWheel = async () => {
   const data = snap.val();
   const players = data.players || {};
   const allPids = Object.keys(players);
-  // Reset confirms, set wheel mode
   const confirms = {};
   allPids.forEach(pid => { confirms[pid] = false; });
+  wheelAnimationStarted = false;
   await update(roomRef, { wheelActive: true, wheelConfirms: confirms, wheelSpunGame: null });
 };
 
@@ -607,11 +626,36 @@ window.confirmWheel = async () => {
   if (myConfirmed) return;
   myConfirmed = true;
   document.getElementById('myConfirmBtn').disabled = true;
+
+  // Write my confirm first
   await update(roomRef, { [`wheelConfirms/${myPlayerId}`]: true });
+
+  // Re-read fresh state — check if ALL players confirmed now
+  const snap = await get(roomRef);
+  const data = snap.val();
+  // Already spinning or result already set — nothing to do
+  if (data.wheelSpunGame !== null && data.wheelSpunGame !== undefined) return;
+
+  const allPids = Object.keys(data.players || {});
+  const confirms = data.wheelConfirms || {};
+  const allConfirmed = allPids.length > 0 && allPids.every(pid => confirms[pid]);
+  if (!allConfirmed) return;
+
+  // Use Firebase transaction to make sure only ONE client writes the winner
+  // Simple approach: only the player whose ID is first alphabetically writes it
+  const sortedPids = [...allPids].sort();
+  if (myPlayerId !== sortedPids[0]) return;
+
+  const items = getWheelItems(data);
+  if (items.length === 0) return;
+  const winnerIdx = Math.floor(Math.random() * items.length);
+  await update(roomRef, { wheelSpunGame: items[winnerIdx].index });
 };
 
 window.cancelWheel = async () => {
   myConfirmed = false;
+  wheelAnimationStarted = false;
+  wheelSpinning = false;
   await update(roomRef, { wheelActive: false, wheelConfirms: {}, wheelSpunGame: null });
   document.getElementById('wheelOverlay').classList.remove('active');
 };
@@ -633,26 +677,19 @@ function openWheelOverlay(data) {
     </div>`;
   }).join('');
 
-  // My confirm button
   document.getElementById('myConfirmBtn').disabled = myConfirmed || !!confirms[myPlayerId];
   if (confirms[myPlayerId]) myConfirmed = true;
 
-  // Priority 1: wheel already spun — show static result
+  // wheelSpunGame set = winner already picked by Firebase → everyone animates to that result
   if (data.wheelSpunGame !== null && data.wheelSpunGame !== undefined) {
     document.getElementById('wheelConfirmPhase').style.display = 'none';
     document.getElementById('wheelSpinPhase').style.display = 'flex';
-    document.getElementById('wheelSubtitle').textContent = 'Колесо остановилось!';
-    if (!wheelSpinning) drawWheelStatic(data);
-    return;
-  }
-
-  // Priority 2: all confirmed — start spinning (only once)
-  const allConfirmed = allPids.length > 0 && allPids.every(pid => confirms[pid]);
-  if (allConfirmed && !wheelSpinning) {
-    document.getElementById('wheelConfirmPhase').style.display = 'none';
-    document.getElementById('wheelSpinPhase').style.display = 'flex';
-    document.getElementById('wheelSubtitle').textContent = 'Все согласны! Крутим...';
-    startWheelSpin(data);
+    document.getElementById('wheelSubtitle').textContent = 'Крутим...';
+    // Guard: only start animation once per client per wheel session
+    if (!wheelAnimationStarted) {
+      wheelAnimationStarted = true;
+      startWheelSpin(data);
+    }
     return;
   }
 
@@ -724,24 +761,20 @@ function startWheelSpin(data) {
   document.getElementById('wheelResult').textContent = '';
   document.getElementById('wheelActions').style.display = 'none';
 
-  // Pick random winner
-  const winnerIdx = Math.floor(Math.random() * wheelItems.length);
-  const slice = (2 * Math.PI) / wheelItems.length;
+  // Winner is determined by HOST and stored in Firebase — all clients use the same index
+  const winnerGameIndex = data.wheelSpunGame;
+  const winnerIdx = wheelItems.findIndex(item => item.index === winnerGameIndex);
+  if (winnerIdx < 0) { wheelSpinning = false; return; }
 
-  // Pointer is at TOP = -π/2 in canvas coordinates.
-  // Sector i occupies [angle + i*slice, angle + (i+1)*slice].
-  // Center of sector i = angle + i*slice + slice/2.
-  // We need that center = -π/2  (mod 2π).
-  // So: finalAngle + winnerIdx*slice + slice/2 = -π/2
-  //     finalAngle = -π/2 - winnerIdx*slice - slice/2
-  // Add full rotations so the wheel visually spins several times.
-  const rotations = 6 + Math.floor(Math.random() * 4); // 6-9 full rotations
+  const slice = (2 * Math.PI) / wheelItems.length;
+  // Pointer at TOP = -π/2. Center of sector winnerIdx must end up there.
+  // finalAngle + winnerIdx*slice + slice/2 = -π/2  →  finalAngle = -π/2 - winnerIdx*slice - slice/2
+  const rotations = 6; // fixed so animation duration is predictable
   const targetAngle = -Math.PI / 2 - winnerIdx * slice - slice / 2;
-  // normalise into [0, 2π) then add full rotations so we always spin forward
   const normalised = ((targetAngle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
   const finalAngle = normalised + rotations * 2 * Math.PI;
 
-  const duration = 4000 + Math.random() * 1500;
+  const duration = 4500;
   const startTime = performance.now();
 
   function easeOut(t) { return 1 - Math.pow(1 - t, 4); }
@@ -760,9 +793,8 @@ function startWheelSpin(data) {
       wheelCurrentGame = wheelItems[winnerIdx].name;
       wheelCurrentGameIndex = wheelItems[winnerIdx].index;
       document.getElementById('wheelResult').textContent = '🎯 ' + wheelCurrentGame;
+      document.getElementById('wheelSubtitle').textContent = 'Колесо остановилось!';
       document.getElementById('wheelActions').style.display = 'flex';
-      // Save result to Firebase so ALL players know which game was chosen
-      update(roomRef, { wheelSpunGame: wheelCurrentGameIndex });
     }
   }
   drawWheel(wheelItems, wheelAngle);
@@ -813,6 +845,7 @@ window.wheelBanCurrent = async () => {
 
   // Reset local wheel state
   wheelSpinning = false;
+  wheelAnimationStarted = false;
   wheelCurrentGame = null;
   wheelCurrentGameIndex = null;
   myConfirmed = false;
