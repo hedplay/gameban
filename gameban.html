@@ -438,18 +438,26 @@ function listenRoom() {
     if (data.status === 'lobby') renderLobby(data);
     if (data.status === 'banning') {
       renderBanPhase(data);
-      // Host responsibility: if wheel is active, all confirmed, but winner not yet chosen → pick now
-      if (data.wheelActive && data.wheelSpunGame === null || data.wheelSpunGame === undefined) {
-        const isHost = data.hostId === myPlayerId;
-        if (isHost && !data.wheelSpinning) {
-          const allPids = Object.keys(data.players || {});
-          const confirms = data.wheelConfirms || {};
-          const allConfirmed = allPids.length > 0 && allPids.every(pid => confirms[pid]);
-          if (allConfirmed) {
+
+      // When wheel is active and all confirmed but sequence not yet generated:
+      // alphabetically-first player generates the full elimination sequence
+      if (data.wheelActive && !data.wheelSequence) {
+        const allPids = Object.keys(data.players || {});
+        const confirms = data.wheelConfirms || {};
+        const allConfirmed = allPids.length > 0 && allPids.every(pid => confirms[pid]);
+        if (allConfirmed) {
+          const sortedPids = [...allPids].sort();
+          if (myPlayerId === sortedPids[0]) {
             const items = getWheelItems(data);
             if (items.length > 0) {
-              const winnerIdx = Math.floor(Math.random() * items.length);
-              update(roomRef, { wheelSpunGame: items[winnerIdx].index, wheelSpinning: true });
+              const remaining = [...items];
+              const sequence = [];
+              while (remaining.length > 1) {
+                const pick = Math.floor(Math.random() * remaining.length);
+                sequence.push(remaining[pick].index);
+                remaining.splice(pick, 1);
+              }
+              update(roomRef, { wheelSequence: sequence });
             }
           }
         }
@@ -625,36 +633,9 @@ window.confirmWheel = async () => {
   if (myConfirmed) return;
   myConfirmed = true;
   document.getElementById('myConfirmBtn').disabled = true;
-
   await update(roomRef, { [`wheelConfirms/${myPlayerId}`]: true });
-
-  // Re-read to check if ALL confirmed
-  const snap = await get(roomRef);
-  const data = snap.val();
-  if (data.wheelSequence) return; // already generated
-
-  const allPids = Object.keys(data.players || {});
-  const confirms = data.wheelConfirms || {};
-  const allConfirmed = allPids.length > 0 && allPids.every(pid => confirms[pid]);
-  if (!allConfirmed) return;
-
-  // Only alphabetically-first player generates the sequence
-  const sortedPids = [...allPids].sort();
-  if (myPlayerId !== sortedPids[0]) return;
-
-  // Generate full elimination order RIGHT NOW
-  const items = getWheelItems(data);
-  if (items.length === 0) return;
-  const remaining = [...items];
-  const sequence = []; // ordered list of gameIndexes to eliminate
-  while (remaining.length > 1) {
-    const pick = Math.floor(Math.random() * remaining.length);
-    sequence.push(remaining[pick].index);
-    remaining.splice(pick, 1);
-  }
-  // sequence[0] = first eliminated, sequence[last] = last eliminated before winner
-  // remaining[0] = winner
-  await update(roomRef, { wheelSequence: sequence });
+  // Generation is handled by onValue - when Firebase updates, all clients
+  // check if all confirmed, and the alphabetically-first one writes the sequence
 };
 
 window.cancelWheel = async () => {
